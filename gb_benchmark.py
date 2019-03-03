@@ -14,6 +14,7 @@ import time
 import warnings
 from typing import List
 
+from data_source.fraud_detection import data_fraud_detection
 from data_source.heart_disease import data_heart_disease
 from data_source.home_credit import data_home_credit
 from data_source.csc_hw1_spring19 import data_csc_hw1_spring19
@@ -197,23 +198,30 @@ def main(debug=False):
     start_time_marker = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
     result_file = f'gb_benchmark_result/gb_bench_{start_time_marker}.json'
     if debug:
-        num_rows = 1000
+        num_rows = 10000
         num_folds = 2
     else:
         num_rows = None
         num_folds = 10
 
     small_data_params_clf = {
-        'sklearn': {'n_estimators': 100, 'max_depth': 4, 'learning_rate': 0.1},
-        'lightgbm': {'n_estimators': 100, 'max_depth': 4, 'learning_rate': 0.1},
-        'xgboost': {'n_estimators': 100, 'max_depth': 4, 'learning_rate': 0.1},
-        'catboost': {'iterations': 100, 'max_depth': 4, 'verbose': False}
+        'sklearn': {'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.1},
+        'lightgbm': {'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.1},
+        'xgboost': {'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.1},
+        'catboost': {'iterations': 100, 'max_depth': 3, 'verbose': False}
+    }
+    data_params_clf  = {
+        'sklearn': {'n_estimators': 1000, 'max_depth': 8, 'learning_rate': 0.1},
+        'lightgbm': {'n_estimators': 1000, 'max_depth': 8, 'learning_rate': 0.1},
+        'xgboost': {'n_estimators': 1000, 'max_depth': 8, 'learning_rate': 0.1},
+        'catboost': {'iterations': 1000, 'max_depth': 8, 'verbose': False}
     }
 
     plan = [
         ("heart-disease", data_heart_disease, small_data_params_clf),
-        ("home-credit", data_home_credit, small_data_params_clf),
-        ("csc_hw1_spring19", data_csc_hw1_spring19, small_data_params_clf)
+        ("home-credit", data_home_credit, data_params_clf),
+        ("csc_hw1_spring19", data_csc_hw1_spring19, data_params_clf),
+        ("fraud_detection",data_fraud_detection,data_params_clf)
     ]
 
     bench_result = []
@@ -250,4 +258,4 @@ def main(debug=False):
 
 if __name__ == "__main__":
     with timer("Full benchmark run"):
-        main(debug=True)
+        main(debug=False)
