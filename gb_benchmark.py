@@ -70,32 +70,49 @@ def auc_clf(X_orig, y_orig, classifier: ClassifierWrapper, num_folds=10, verbose
     predict_time_a = np.empty([num_folds])
     auc_a = np.empty([num_folds])
     X, y = classifier.preprocessed(X_orig, y_orig)
-    for n_fold, (train_index, test_index) in enumerate(folds.split(X, y)):
-        if verbose:
-            print(f"Fold ({n_fold}/{num_folds})")
-        X_train, X_test = X.iloc[train_index], X.iloc[test_index]
-        y_train, y_test = y.iloc[train_index], y.iloc[test_index]
-        classifier.create()
-        start_learn = time.time()
-        classifier.fit(X_train, y_train)
-        end_learn = time.time()
-        start_predict = time.time()
-        preds_class = classifier.predict_proba(X_test)
-        end_predict = time.time()
-        auc = metrics.roc_auc_score(y_test, preds_class)
-        learn_time_a[n_fold] = end_learn - start_learn
-        predict_time_a[n_fold] = end_predict - start_predict
-        auc_a[n_fold] = auc
-        classifier.clear()
-    return {'target': 'auc',
-            'model': classifier.get_title(),
-            'auc': calc_stat(auc_a),
-            'learn_sec': calc_stat(learn_time_a),
-            'predict_sec': calc_stat(predict_time_a),
-            'dataset_rows': len(X),
-            'dataset_columns': len(X.columns),
-            'num_folds': num_folds
-            }
+    try:
+        for n_fold, (train_index, test_index) in enumerate(folds.split(X, y)):
+            if verbose:
+                print(f"Fold ({n_fold+1}/{num_folds})")
+            X_train, X_test = X.iloc[train_index], X.iloc[test_index]
+            y_train, y_test = y.iloc[train_index], y.iloc[test_index]
+            classifier.create()
+            start_learn = time.time()
+            classifier.fit(X_train, y_train)
+            end_learn = time.time()
+            start_predict = time.time()
+            preds_class = classifier.predict_proba(X_test)
+            end_predict = time.time()
+            auc = metrics.roc_auc_score(y_test, preds_class)
+            learn_time_a[n_fold] = end_learn - start_learn
+            predict_time_a[n_fold] = end_predict - start_predict
+            auc_a[n_fold] = auc
+            classifier.clear()
+        return {'target': 'auc',
+                'fail': False,
+                'fail_msg':None,
+                'model': classifier.get_title(),
+                'auc': calc_stat(auc_a),
+                'learn_sec': calc_stat(learn_time_a),
+                'predict_sec': calc_stat(predict_time_a),
+                'dataset_rows': len(X),
+                'dataset_columns': len(X.columns),
+                'num_folds': num_folds
+                }
+    except Exception as e:
+        print("Warning!",str(e))
+        return {'target': 'auc',
+                'model': classifier.get_title(),
+                'fail':True,
+                'fail_msg': str(e),
+                'auc': None,
+                'learn_sec': None,
+                'predict_sec': None,
+                'dataset_rows': len(X),
+                'dataset_columns': len(X.columns),
+                'num_folds': num_folds
+                }
+
 
 
 def auc_clf_series(X, y, classifiers: List[ClassifierWrapper], num_folds=10, verbose=False):
