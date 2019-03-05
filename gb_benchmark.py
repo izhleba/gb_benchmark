@@ -149,7 +149,6 @@ class LightgbmClassifier(ClassifierWrapper):
         super().__init__('lightgbm', params)
 
     def create(self):
-        self.params['eval_metric'] = 'auc'
         self.model = lgb.LGBMClassifier(**self.params)
 
     def fit(self, X, y):
@@ -221,45 +220,69 @@ def main(debug=False):
         num_rows = None
         num_folds = 10
 
-    small_data_params_clf = {
+    params_clf_1 = {
         'sklearn': {'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.1},
         'lightgbm': {'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.1},
         'xgboost': {'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.1},
-        'catboost': {'iterations': 100, 'max_depth': 3, 'verbose': False}
+        'catboost': {'iterations': 100, 'max_depth': 3, 'learning_rate': 0.1, 'verbose': False}
     }
-    data_params_clf  = {
-        'sklearn': {'n_estimators': 1000, 'max_depth': 8, 'learning_rate': 0.1},
-        'lightgbm': {'n_estimators': 1000, 'max_depth': 8, 'learning_rate': 0.1},
-        'xgboost': {'n_estimators': 1000, 'max_depth': 8, 'learning_rate': 0.1},
-        'catboost': {'iterations': 1000, 'max_depth': 8, 'verbose': False}
+    params_clf_2 = {
+        'sklearn': {'n_estimators': 250, 'max_depth': 3, 'learning_rate': 0.1},
+        'lightgbm': {'n_estimators': 250, 'max_depth': 3, 'learning_rate': 0.1},
+        'xgboost': {'n_estimators': 250, 'max_depth': 3, 'learning_rate': 0.1},
+        'catboost': {'iterations': 250, 'max_depth': 3, 'learning_rate': 0.1, 'verbose': False}
     }
+    params_clf_3 = {
+        'sklearn': {'n_estimators': 500, 'max_depth': 3, 'learning_rate': 0.1},
+        'lightgbm': {'n_estimators': 500, 'max_depth': 3, 'learning_rate': 0.1},
+        'xgboost': {'n_estimators': 500, 'max_depth': 3, 'learning_rate': 0.1},
+        'catboost': {'iterations': 500, 'max_depth': 3, 'learning_rate': 0.1, 'verbose': False}
+    }
+    params_clf_3 = {
+        'sklearn': {'n_estimators': 750, 'max_depth': 3, 'learning_rate': 0.1},
+        'lightgbm': {'n_estimators': 750, 'max_depth': 3, 'learning_rate': 0.1},
+        'xgboost': {'n_estimators': 750, 'max_depth': 3, 'learning_rate': 0.1},
+        'catboost': {'iterations': 750, 'max_depth': 3, 'learning_rate': 0.1, 'verbose': False}
+    }
+    params_clf_4  = {
+        'sklearn': {'n_estimators': 1000, 'max_depth': 3, 'learning_rate': 0.1},
+        'lightgbm': {'n_estimators': 1000, 'max_depth': 3, 'learning_rate': 0.1},
+        'xgboost': {'n_estimators': 1000, 'max_depth': 3, 'learning_rate': 0.1},
+        'catboost': {'iterations': 1000, 'max_depth': 3, 'learning_rate': 0.1, 'verbose': False}
+    }
+    params_list_cls = [params_clf_1,params_clf_2,params_clf_3,params_clf_4]
 
     plan = [
-        ("heart-disease", data_heart_disease, small_data_params_clf),
-        ("home-credit", data_home_credit, data_params_clf),
-        ("csc_hw1_spring19", data_csc_hw1_spring19, data_params_clf),
-        ("fraud_detection",data_fraud_detection,data_params_clf)
+        ("heart-disease", data_heart_disease, params_list_cls),
+        ("home-credit", data_home_credit, params_list_cls),
+        ("csc_hw1_spring19", data_csc_hw1_spring19, params_list_cls),
+        ("fraud_detection",data_fraud_detection,params_list_cls)
     ]
 
     bench_result = []
-    for data_name, data_fun, params in plan:
+    for data_name, data_fun, params_list in plan:
         gc.collect()
         print(f"Load dataset:{data_name}")
         X, y = data_fun(num_rows)
-        print(f"Make classifierss for {data_name}")
-        classifiers = make_classifiers(params)
-        print(f"Benchmark classifiers for {data_name}")
-        clf_result = auc_clf_series(X, y, classifiers, num_folds=num_folds, verbose=True)
-        bench_result.append({
-            'dataset': data_name,
-            'test': 'classification',
-            'params': params,
-            'results': clf_result
-        })
+        for i,params in enumerate(params_list):
+            print(f"Params {i+1}/{len(params_list)}")
+            print(f"Make classifierss for {data_name}")
+            classifiers = make_classifiers(params)
+            print(f"Benchmark classifiers for {data_name}")
+            clf_result = auc_clf_series(X, y, classifiers, num_folds=num_folds, verbose=True)
+            bench_result.append({
+                'dataset': data_name,
+                'test': 'classification',
+                'params': params,
+                'results': clf_result
+            })
+            # Write temp file
+            print("Savepoint")
+            with open(result_file + "_.tmp", 'w+') as outfile:
+                json.dump(bench_result, outfile)
+        print("Delete X,y")
         del X, y
-        # Write temp file
-        with open(result_file + "_.tmp", 'w') as outfile:
-            json.dump(bench_result, outfile)
+
 
     if debug:
         print('Result:')
@@ -275,4 +298,4 @@ def main(debug=False):
 
 if __name__ == "__main__":
     with timer("Full benchmark run"):
-        main(debug=False)
+        main(debug=True)
