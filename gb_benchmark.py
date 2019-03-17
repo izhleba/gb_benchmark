@@ -1,10 +1,11 @@
 import datetime
 from contextlib import contextmanager
-
+import argparse
 import catboost as cb
 import lightgbm as lgb
+import sys
 import xgboost as xgb
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, StratifiedKFold
 from sklearn import ensemble
 from sklearn import metrics
 import numpy as np
@@ -18,6 +19,7 @@ from data_source.fraud_detection import data_fraud_detection
 from data_source.heart_disease import data_heart_disease
 from data_source.home_credit import data_home_credit
 from data_source.csc_hw1_spring19 import data_csc_hw1_spring19
+from data_source.home_credit_cat import data_home_credit_cat
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
@@ -36,24 +38,20 @@ def calc_stat(array):
 
 
 class ClassifierWrapper:
-    def __init__(self, title, params):
+    def __init__(self, params):
         self.model = None
-        self.title = title
         self.params = {} if params is None else params
 
-    def get_title(self):
-        return self.title
-
-    def preprocessed(self, X, y):
+    def preprocessed(self, X, y, cat_features):
         return X, y
 
     def create(self):
         pass
 
-    def fit(self, X, y):
+    def fit(self, X, y, cat_features):
         pass
 
-    def predict_proba(self, X):
+    def predict_proba(self, X, cat_features):
         pass
 
     def clear(self):
@@ -62,14 +60,13 @@ class ClassifierWrapper:
         gc.collect()
 
 
-def auc_clf(X_orig, y_orig, classifier: ClassifierWrapper, num_folds=10, verbose=False):
-    if verbose:
-        print(f"Benchmark AUC classifier for {classifier.get_title()}")
-    folds = KFold(n_splits=num_folds, shuffle=True, random_state=1001)
+def auc_clf(X_orig, y_orig, classifier: ClassifierWrapper, cat_features=[], num_folds=10, verbose=False):
+    folds = StratifiedKFold(n_splits=num_folds, shuffle=True, random_state=1001)
+    # folds = KFold(n_splits=num_folds, shuffle=True, random_state=1001)
     learn_time_a = np.empty([num_folds])
     predict_time_a = np.empty([num_folds])
     auc_a = np.empty([num_folds])
-    X, y = classifier.preprocessed(X_orig, y_orig)
+    X, y = classifier.preprocessed(X_orig, y_orig, cat_features)
     try:
         for n_fold, (train_index, test_index) in enumerate(folds.split(X, y)):
             if verbose:
@@ -78,10 +75,10 @@ def auc_clf(X_orig, y_orig, classifier: ClassifierWrapper, num_folds=10, verbose
             y_train, y_test = y.iloc[train_index], y.iloc[test_index]
             classifier.create()
             start_learn = time.time()
-            classifier.fit(X_train, y_train)
+            classifier.fit(X_train, y_train, cat_features)
             end_learn = time.time()
             start_predict = time.time()
-            preds_class = classifier.predict_proba(X_test)
+            preds_class = classifier.predict_proba(X_test, cat_features)
             end_predict = time.time()
             auc = metrics.roc_auc_score(y_test, preds_class)
             learn_time_a[n_fold] = end_learn - start_learn
@@ -90,8 +87,7 @@ def auc_clf(X_orig, y_orig, classifier: ClassifierWrapper, num_folds=10, verbose
             classifier.clear()
         return {'target': 'auc',
                 'fail': False,
-                'fail_msg':None,
-                'model': classifier.get_title(),
+                'fail_msg': None,
                 'auc': calc_stat(auc_a),
                 'learn_sec': calc_stat(learn_time_a),
                 'predict_sec': calc_stat(predict_time_a),
@@ -100,11 +96,11 @@ def auc_clf(X_orig, y_orig, classifier: ClassifierWrapper, num_folds=10, verbose
                 'num_folds': num_folds
                 }
     except Exception as e:
-        print("Warning!",str(e))
+        print("Warning!", str(e), sys.exc_info()[0])
         return {'target': 'auc',
-                'model': classifier.get_title(),
-                'fail':True,
+                'fail': True,
                 'fail_msg': str(e),
+                'fail_msg2': str(sys.exc_info()[0]),
                 'auc': None,
                 'learn_sec': None,
                 'predict_sec': None,
@@ -114,168 +110,177 @@ def auc_clf(X_orig, y_orig, classifier: ClassifierWrapper, num_folds=10, verbose
                 }
 
 
-
-def auc_clf_series(X, y, classifiers: List[ClassifierWrapper], num_folds=10, verbose=False):
-    return [auc_clf(X, y, c, num_folds=num_folds, verbose=verbose) for c in classifiers]
-
-
-class SklearnClassifier(ClassifierWrapper):
+class SklearnClf(ClassifierWrapper):
     def __init__(self, params=None):
-        super().__init__('sklearn', params)
+        super().__init__(params)
         self.X_mean = None
 
     def create(self):
         self.model = ensemble.GradientBoostingClassifier(**self.params)
 
-    def preprocessed(self, X, y):
+    def preprocessed(self, X, y, cat_features):
         if not np.isfinite(X).all().all():
             print("Copy data without NaN for sklearn")
             X2 = X.copy()
+            X2 = X2.replace([np.inf, -np.inf], np.nan)
             X2 = X2.dropna(axis=1, how='all')
             X2.fillna(X2.mean(), inplace=True)
             return X2, y
         else:
             return X, y
 
-    def fit(self, X, y):
-        self.model.fit(X, y)
+    def fit(self, X, y, cat_features):
+        if len(cat_features) > 0:
+            print("Sklearn no cat_features support")
+        else:
+            self.model.fit(X, y)
 
-    def predict_proba(self, X):
+    def predict_proba(self, X, cat_features):
         return self.model.predict_proba(X)[:, 1]
 
 
-class LightgbmClassifier(ClassifierWrapper):
-    def __init__(self, params=None):
-        super().__init__('lightgbm', params)
-
+class LightgbmClf(ClassifierWrapper):
     def create(self):
         self.model = lgb.LGBMClassifier(**self.params)
 
-    def fit(self, X, y):
-        self.model.fit(X, y, eval_metric='auc')
+    def fit(self, X, y, cat_features):
+        if len(cat_features) > 0:
+            print(f"Lightgbm with cat features {cat_features}")
+            self.model.fit(X, y, eval_metric='auc', categorical_feature=cat_features)
+        else:
+            self.model.fit(X, y, eval_metric='auc')
 
-    def predict_proba(self, X):
+    def predict_proba(self, X, cat_features):
         return self.model.predict_proba(X)[:, 1]
 
 
-class XgboostClassifier(ClassifierWrapper):
-    def __init__(self, params=None):
-        super().__init__('xgboost', params)
-
+class XgboostClf(ClassifierWrapper):
     def create(self):
         self.params['eval_metric'] = 'auc'
         self.model = xgb.XGBClassifier(**self.params)
 
-    def fit(self, X, y):
-        self.model.fit(X, y, eval_metric='auc')
+    def fit(self, X, y, cat_features):
+        if len(cat_features) > 0:
+            print("Sklearn no cat_features support")
+        else:
+            self.model.fit(X, y, eval_metric='auc')
 
-    def predict_proba(self, X):
+    def predict_proba(self, X, cat_features):
         return self.model.predict_proba(X)[:, 1]
 
 
-class CatboostClassifier(ClassifierWrapper):
-    def __init__(self, params=None):
-        super().__init__('catboost', params)
-
+class CatboostClf(ClassifierWrapper):
     def create(self):
         self.params['eval_metric'] = 'AUC'
         self.model = cb.CatBoostClassifier(**self.params)
 
-    def fit(self, X, y):
-        self.model.fit(X, y)
+    def fit(self, X, y, cat_features):
+        if len(cat_features) > 0:
+            print(f"Catboost with cat features {cat_features}")
+            self.model.fit(X, y, cat_features)
+        else:
+            self.model.fit(X, y)
 
-    def predict_proba(self, X):
+    def predict_proba(self, X, cat_features):
         return self.model.predict_proba(X)[:, 1]
 
 
-def make_classifiers(params=None):
-    if params is not None:
-        def strict_get(field):
-            if field not in params:
-                raise Exception(f"Field '{field}' not found in params.")
-            else:
-                return params[field]
-
-        sklearn_p = strict_get('sklearn')
-        lightgbm_p = strict_get('lightgbm')
-        xgboost_p = strict_get('xgboost')
-        catboost_p = strict_get('catboost')
-    else:
-        sklearn_p = lightgbm_p = xgboost_p = catboost_p = {}
-    return [
-        SklearnClassifier(params=sklearn_p),
-        LightgbmClassifier(params=lightgbm_p),
-        XgboostClassifier(params=xgboost_p),
-        CatboostClassifier(params=catboost_p)
-    ]
-
-
 def main(debug=False):
+    print(f"Debug: {debug}")
     start_time_marker = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
     result_file = f'gb_benchmark_result/gb_bench_{start_time_marker}.json'
     if debug:
-        num_rows = 10000
+        num_rows = 100000
         num_folds = 2
     else:
         num_rows = None
         num_folds = 10
 
-    params_clf_1 = {
-        'sklearn': {'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.1},
-        'lightgbm': {'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.1},
-        'xgboost': {'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.1},
-        'catboost': {'iterations': 100, 'max_depth': 3, 'learning_rate': 0.1, 'verbose': False}
+    clf_config = {
+        'sklearn': (SklearnClf, [
+            {'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.05},
+            {'n_estimators': 100, 'max_depth': 5, 'learning_rate': 0.05},
+            {'n_estimators': 100, 'max_depth': 7, 'learning_rate': 0.05},
+            {'n_estimators': 500, 'max_depth': 3, 'learning_rate': 0.05},
+            {'n_estimators': 500, 'max_depth': 5, 'learning_rate': 0.05},
+            {'n_estimators': 500, 'max_depth': 7, 'learning_rate': 0.05},
+            {'n_estimators': 1000, 'max_depth': 3, 'learning_rate': 0.05},
+            {'n_estimators': 1000, 'max_depth': 5, 'learning_rate': 0.05},
+            {'n_estimators': 1000, 'max_depth': 7, 'learning_rate': 0.05},
+        ]),
+        'lightgbm': (LightgbmClf, [
+            {'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.05},
+            {'n_estimators': 100, 'max_depth': 5, 'learning_rate': 0.05},
+            {'n_estimators': 100, 'max_depth': 7, 'learning_rate': 0.05},
+            {'n_estimators': 500, 'max_depth': 3, 'learning_rate': 0.05},
+            {'n_estimators': 500, 'max_depth': 5, 'learning_rate': 0.05},
+            {'n_estimators': 500, 'max_depth': 7, 'learning_rate': 0.05},
+            {'n_estimators': 1000, 'max_depth': 3, 'learning_rate': 0.05},
+            {'n_estimators': 1000, 'max_depth': 5, 'learning_rate': 0.05},
+            {'n_estimators': 1000, 'max_depth': 7, 'learning_rate': 0.05},
+        ]),
+        'xgboost': (XgboostClf, [
+            {'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.05, 'tree_method': 'exact'},
+            {'n_estimators': 100, 'max_depth': 5, 'learning_rate': 0.05, 'tree_method': 'exact'},
+            {'n_estimators': 100, 'max_depth': 7, 'learning_rate': 0.05, 'tree_method': 'exact'},
+            {'n_estimators': 500, 'max_depth': 3, 'learning_rate': 0.05, 'tree_method': 'exact'},
+            {'n_estimators': 500, 'max_depth': 5, 'learning_rate': 0.05, 'tree_method': 'exact'},
+            {'n_estimators': 500, 'max_depth': 7, 'learning_rate': 0.05, 'tree_method': 'exact'},
+            {'n_estimators': 1000, 'max_depth': 3, 'learning_rate': 0.05, 'tree_method': 'exact'},
+            {'n_estimators': 1000, 'max_depth': 5, 'learning_rate': 0.05, 'tree_method': 'exact'},
+            {'n_estimators': 1000, 'max_depth': 7, 'learning_rate': 0.05, 'tree_method': 'exact'}
+        ]),
+        'xgb_hist': (XgboostClf, [
+            {'n_estimators': 100, 'max_depth': 3, 'learning_rate': 0.05, 'tree_method': 'hist'},
+            {'n_estimators': 100, 'max_depth': 5, 'learning_rate': 0.05, 'tree_method': 'hist'},
+            {'n_estimators': 100, 'max_depth': 7, 'learning_rate': 0.05, 'tree_method': 'hist'},
+            {'n_estimators': 500, 'max_depth': 3, 'learning_rate': 0.05, 'tree_method': 'hist'},
+            {'n_estimators': 500, 'max_depth': 5, 'learning_rate': 0.05, 'tree_method': 'hist'},
+            {'n_estimators': 500, 'max_depth': 7, 'learning_rate': 0.05, 'tree_method': 'hist'},
+            {'n_estimators': 1000, 'max_depth': 3, 'learning_rate': 0.05, 'tree_method': 'hist'},
+            {'n_estimators': 1000, 'max_depth': 5, 'learning_rate': 0.05, 'tree_method': 'hist'},
+            {'n_estimators': 1000, 'max_depth': 7, 'learning_rate': 0.05, 'tree_method': 'hist'}
+        ]),
+        'catboost': (CatboostClf, [
+            {'iterations': 100, 'max_depth': 3, 'learning_rate': 0.05, 'verbose': False},
+            {'iterations': 100, 'max_depth': 5, 'learning_rate': 0.05, 'verbose': False},
+            {'iterations': 100, 'max_depth': 7, 'learning_rate': 0.05, 'verbose': False},
+            {'iterations': 100, 'max_depth': 3, 'learning_rate': 0.05, 'verbose': False},
+            {'iterations': 100, 'max_depth': 5, 'learning_rate': 0.05, 'verbose': False},
+            {'iterations': 100, 'max_depth': 7, 'learning_rate': 0.05, 'verbose': False},
+            {'iterations': 100, 'max_depth': 3, 'learning_rate': 0.05, 'verbose': False},
+            {'iterations': 100, 'max_depth': 5, 'learning_rate': 0.05, 'verbose': False},
+            {'iterations': 100, 'max_depth': 7, 'learning_rate': 0.05, 'verbose': False}
+        ])
     }
-    params_clf_2 = {
-        'sklearn': {'n_estimators': 250, 'max_depth': 3, 'learning_rate': 0.1},
-        'lightgbm': {'n_estimators': 250, 'max_depth': 3, 'learning_rate': 0.1},
-        'xgboost': {'n_estimators': 250, 'max_depth': 3, 'learning_rate': 0.1},
-        'catboost': {'iterations': 250, 'max_depth': 3, 'learning_rate': 0.1, 'verbose': False}
-    }
-    params_clf_3 = {
-        'sklearn': {'n_estimators': 500, 'max_depth': 3, 'learning_rate': 0.1},
-        'lightgbm': {'n_estimators': 500, 'max_depth': 3, 'learning_rate': 0.1},
-        'xgboost': {'n_estimators': 500, 'max_depth': 3, 'learning_rate': 0.1},
-        'catboost': {'iterations': 500, 'max_depth': 3, 'learning_rate': 0.1, 'verbose': False}
-    }
-    params_clf_3 = {
-        'sklearn': {'n_estimators': 750, 'max_depth': 3, 'learning_rate': 0.1},
-        'lightgbm': {'n_estimators': 750, 'max_depth': 3, 'learning_rate': 0.1},
-        'xgboost': {'n_estimators': 750, 'max_depth': 3, 'learning_rate': 0.1},
-        'catboost': {'iterations': 750, 'max_depth': 3, 'learning_rate': 0.1, 'verbose': False}
-    }
-    params_clf_4  = {
-        'sklearn': {'n_estimators': 1000, 'max_depth': 3, 'learning_rate': 0.1},
-        'lightgbm': {'n_estimators': 1000, 'max_depth': 3, 'learning_rate': 0.1},
-        'xgboost': {'n_estimators': 1000, 'max_depth': 3, 'learning_rate': 0.1},
-        'catboost': {'iterations': 1000, 'max_depth': 3, 'learning_rate': 0.1, 'verbose': False}
-    }
-    params_list_cls = [params_clf_1,params_clf_2,params_clf_3,params_clf_4]
 
     plan = [
-        ("heart-disease", data_heart_disease, params_list_cls),
-        ("home-credit", data_home_credit, params_list_cls),
-        ("csc_hw1_spring19", data_csc_hw1_spring19, params_list_cls),
-        ("fraud_detection",data_fraud_detection,params_list_cls)
+        # ("heart-disease", data_heart_disease, clf_config),
+        ("home-credit", data_home_credit, clf_config),
+        ("home-credit-cat", data_home_credit_cat, clf_config)
+        # ("csc_hw1_spring19", data_csc_hw1_spring19, params_list_cls),
+        # ("fraud_detection",data_fraud_detection,params_list_cls)
     ]
 
     bench_result = []
-    for data_name, data_fun, params_list in plan:
+    for data_name, data_fun, config in plan:
         gc.collect()
         print(f"Load dataset:{data_name}")
-        X, y = data_fun(num_rows)
-        for i,params in enumerate(params_list):
-            print(f"Params {i+1}/{len(params_list)}")
-            print(f"Make classifierss for {data_name}")
-            classifiers = make_classifiers(params)
-            print(f"Benchmark classifiers for {data_name}")
-            clf_result = auc_clf_series(X, y, classifiers, num_folds=num_folds, verbose=True)
-            bench_result.append({
-                'dataset': data_name,
-                'test': 'classification',
-                'params': params,
-                'results': clf_result
-            })
+        X, y, cat_features = data_fun(num_rows)
+        config_items = config.items()
+        for i, (clf_name, (clf_class, params_list)) in enumerate(config_items):
+            for j, params in enumerate(params_list):
+                print(f"Clf: {clf_name} {i+1}/{len(config_items)}. Params: {j+1}/{len(params_list)}")
+                classifier = clf_class(params=params)
+                clf_result = auc_clf(X, y, classifier, cat_features=cat_features, num_folds=num_folds, verbose=True)
+                bench_result.append({
+                    'dataset': data_name,
+                    'test': 'classification',
+                    'params': params,
+                    'name': clf_name,
+                    'result': clf_result
+                })
+
             # Write temp file
             print("Savepoint")
             with open(result_file + "_.tmp", 'w+') as outfile:
@@ -283,13 +288,16 @@ def main(debug=False):
         print("Delete X,y")
         del X, y
 
-
-    if debug:
+    # if debug:
+    if True:
         print('Result:')
         for x in bench_result:
-            print(f'dataset:{x["dataset"]}')
-            for x in x['results']:
-                print(x['model'], x['auc'], 'time:', x['learn_sec']['mean'], x['predict_sec']['mean'])
+            result_ = x['result']
+            if result_['fail'] == False:
+                auc = "auc: %.4f ±%.4f" % (result_['auc']['mean'], result_['auc']['std'])
+                learn = "learn: %.4f ±%.4f" % (result_['learn_sec']['mean'], result_['learn_sec']['std'])
+                pred = "pred: %.4f ±%.4f" % (result_['predict_sec']['mean'], result_['predict_sec']['std'])
+                print(x["dataset"], x['name'], auc, learn, pred, x['params'])
 
     # Final file
     with open(result_file, 'w') as outfile:
@@ -297,5 +305,8 @@ def main(debug=False):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Process some integers.')
+    parser.add_argument('--debug', action='store_true')
+    args = parser.parse_args()
     with timer("Full benchmark run"):
-        main(debug=True)
+        main(debug=args.debug)
