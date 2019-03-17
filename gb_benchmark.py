@@ -13,7 +13,6 @@ import gc
 import json
 import time
 import warnings
-from typing import List
 
 from data_source.fraud_detection import data_fraud_detection
 from data_source.heart_disease import data_heart_disease
